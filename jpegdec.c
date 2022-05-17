@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <string.h>
+#include <va/va.h>
 
 FILE *fd;
 unsigned char ch;
@@ -16,6 +17,11 @@ struct marker {
 	unsigned char mr;
 	const char *desc;
 };
+
+VAHuffmanTableBufferJPEGBaseline hft;
+VAIQMatrixBufferJPEGBaseline iqm;
+VAPictureParameterBufferJPEGBaseline pic_param;
+VASliceParameterBufferJPEGBaseline slice_param;
 
 struct marker markers[] = {
 	{ 0xd8, "Start of Image" },
@@ -69,7 +75,7 @@ void reach_next_marker(void)
 	} while (ch != 0xff);
 }
 
-unsigned int width, height, num_components, format;
+unsigned int width, height, num_components, format, sos_nr_components;
 
 struct format {
 	unsigned char sampler;
@@ -111,7 +117,7 @@ struct table quant_table[4];
 struct table huffman_table[4];
 unsigned num_quant;
 unsigned num_huffman;
-char *compressed_data;
+unsigned char *compressed_data;
 long unsigned int file_size = 0;
 long unsigned int data_size = 0;
 
@@ -140,13 +146,33 @@ int parse_marker_chunk(long unsigned int start, long unsigned int size)
 			break;
 		case 0xda:
 			get_marker_string(s, 0xda);
-			fseek(fd, 0, SEEK_END);
-			file_size = ftell(fd);
 			data_size = file_size - start;
-			compressed_data = (char *)malloc(data_size+4096);
-			fseek(fd, start, SEEK_SET);
-			read_bytes(compressed_data, data_size);
+
+			compressed_data = (unsigned char *)malloc(data_size+4096);
+			if (!compressed_data) {
+				printf("Failed to allocate memory for compressed data\n");
+				free(buf);
+				return 1;
+			} else {
+				fseek(fd, start+0xE, SEEK_SET);
+				read_bytes(compressed_data, data_size-0x10);
+			}
+
 			printf("Parsing %s start=%lu size=%lu\n", s, start, data_size);
+			for (i = 0; i < 32; i++)
+				printf("%x ", buf[i]);
+			printf("\n\n");
+			for (i = 0; i < 16; i++)
+				printf("%x ", compressed_data[i]);
+			printf("\n\n");
+
+			sos_nr_components = buf[4];
+			if (sos_nr_components--)
+				components[0].h_s = buf[0x6];
+			if (sos_nr_components--)
+				components[1].h_s = buf[0x8];
+			if (sos_nr_components--)
+				components[2].h_s = buf[0xa];
 			free(buf);
 			return 1;
 			break;
@@ -214,6 +240,76 @@ int parse_marker_chunk(long unsigned int start, long unsigned int size)
 	return 0;
 }
 
+static void process_huffman_tabels()
+{
+   int i, k;
+   unsigned dcac = 0;
+   unsigned yc = 0;
+	unsigned size = 0;
+   printf("\nProcess Huffman tables %d\n", num_huffman);
+   for (i = 0; i < num_huffman; i++) {
+      yc = (huffman_table[i].coeff[4] & 0xf);
+      dcac = ((huffman_table[i].coeff[4] & 0xf0) >> 4);
+      printf("\n%s %s hft[%d]  ", yc ? "C" : "Y", dcac ? "AC" : "DC", yc);
+		hft.load_huffman_table[yc] = 1;
+		if (!dcac) {
+			size = sizeof(hft.huffman_table[yc].num_dc_codes);
+			memcpy(hft.huffman_table[yc].num_dc_codes, huffman_table[i].coeff + 5, size);
+			for (k = 0; k < size; k++)
+				printf("%x ", hft.huffman_table[yc].num_dc_codes[k]);
+			size = sizeof(hft.huffman_table[yc].dc_values);
+			memcpy(hft.huffman_table[yc].dc_values, huffman_table[i].coeff + 5 + 16, size);
+			for (k = 0; k < size; k++)
+				printf("%x ", hft.huffman_table[yc].dc_values[k]);
+		} else {
+			size = sizeof(hft.huffman_table[yc].num_ac_codes);
+			memcpy(hft.huffman_table[yc].num_ac_codes, huffman_table[i].coeff + 5, size);
+			for (k = 0; k < size; k++)
+				printf("%x ", hft.huffman_table[yc].num_ac_codes[k]);
+			size = sizeof(hft.huffman_table[yc].ac_values);
+			memcpy(hft.huffman_table[yc].ac_values, huffman_table[i].coeff + 5 + 16, size);
+			for (k = 0; k < size; k++)
+				printf("%x ", hft.huffman_table[yc].ac_values[k]);
+
+		}
+   }
+	printf("\n\n\n");
+}
+
+static void process_quantization_tabels()
+{
+	int i, k;
+	printf("\nProcess Quantization table %d\n", num_quant);
+   for (i = 0; i < num_quant; i++) {
+		iqm.load_quantiser_table[i] = 1;
+		memcpy(&iqm.quantiser_table[i][0], &quant_table[i].coeff[5], 64);
+		for (k = 0; k < 64; k++)
+			printf("%2x ", iqm.quantiser_table[i][k]);
+		printf("\n");
+	}
+	printf("\n\n\n");
+}
+
+static void process_picture_param()
+{
+	int i;
+
+	pic_param.picture_width = width; 
+	pic_param.picture_width = height;
+
+	for (i = 0; i < num_components; i++) {
+		pic_param.components[i].component_id = components[i].comp;
+		pic_param.components[i].h_sampling_factor = (components[i].xyf & 0xf0) >> 4;
+		pic_param.components[i].v_sampling_factor = components[i].xyf & 0xf;
+		pic_param.components[i].quantiser_table_selector = components[i].q_s; 
+	}
+}
+
+static void process_slice_param()
+{
+	int i;
+
+}
 
 int main(int argc, char *argv[])
 {
@@ -225,6 +321,10 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
+	fseek(fd, 0, SEEK_END);
+	file_size = ftell(fd);
+	fseek(fd, 0, SEEK_SET);
+
 	for (k = 0; k < num_chunks; k++) {
 		reach_next_marker();
 		prev = pos;
@@ -233,6 +333,11 @@ int main(int argc, char *argv[])
 		if (parse_marker_chunk(prev, size))
 			break;
 	}
+
+   process_huffman_tabels();
+   process_quantization_tabels();
+	process_picture_param();
+	process_slice_param();
 
 	if (compressed_data)
 		free(compressed_data);
