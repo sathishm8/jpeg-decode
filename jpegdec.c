@@ -171,12 +171,13 @@ int parse_marker_chunk(long unsigned int start, long unsigned int size)
 			printf("\n\n");
 
 			sos_nr_components = buf[4];
-			if (sos_nr_components--)
+			if (components[0].comp == buf[5])
 				components[0].h_s = buf[0x6];
-			if (sos_nr_components--)
+			if (components[1].comp == buf[7])
 				components[1].h_s = buf[0x8];
-			if (sos_nr_components--)
+			if (components[2].comp == buf[9])
 				components[2].h_s = buf[0xa];
+
 			free(buf);
 			return 1;
 			break;
@@ -250,7 +251,7 @@ static void process_huffman_tabels()
    unsigned dcac = 0;
    unsigned yc = 0;
 	unsigned size = 0;
-   printf("\nProcess Huffman tables %d\n", num_huffman);
+   printf("Process Huffman tables %d", num_huffman);
    for (i = 0; i < num_huffman; i++) {
       yc = (huffman_table[i].coeff[4] & 0xf);
       dcac = ((huffman_table[i].coeff[4] & 0xf0) >> 4);
@@ -277,7 +278,7 @@ static void process_huffman_tabels()
 
 		}
    }
-	printf("\n\n\n");
+	printf("\n");
 }
 
 static void process_quantization_tabels()
@@ -291,28 +292,44 @@ static void process_quantization_tabels()
 			printf("%2x ", iqm.quantiser_table[i][k]);
 		printf("\n");
 	}
-	printf("\n\n\n");
+	printf("\n");
 }
 
 static void process_picture_param()
 {
 	int i;
 
+	printf("Process Picture params\n");
 	pic_param.picture_width = width; 
-	pic_param.picture_width = height;
+	pic_param.picture_height = height;
 
+	printf("Image %ux%u\n", pic_param.picture_width, pic_param.picture_height);
 	for (i = 0; i < num_components; i++) {
 		pic_param.components[i].component_id = components[i].comp;
 		pic_param.components[i].h_sampling_factor = (components[i].xyf & 0xf0) >> 4;
 		pic_param.components[i].v_sampling_factor = components[i].xyf & 0xf;
 		pic_param.components[i].quantiser_table_selector = components[i].q_s; 
+		printf("Component %d h:%d v:%d Quantization table:%d\n", pic_param.components[i].component_id,
+				 pic_param.components[i].h_sampling_factor,
+				 pic_param.components[i].v_sampling_factor,
+				 pic_param.components[i].quantiser_table_selector);
 	}
+	printf("\n");
 }
 
 static void process_slice_param()
 {
 	int i;
-
+	printf("Process Slice params\n");
+	for (i = 0; i < sos_nr_components; i++) {
+		slice_param.components[i].component_selector = components[i].comp;
+		slice_param.components[i].dc_table_selector = (components[i].h_s & 0xf0) >> 4;
+		slice_param.components[i].ac_table_selector = (components[i].h_s & 0xf);
+		printf("Component %d Huffmantable DC:%d AC:%d\n", slice_param.components[i].component_selector,
+				 slice_param.components[i].dc_table_selector,
+				 slice_param.components[i].ac_table_selector);
+	}
+	printf("\n");
 }
 
 int main(int argc, char *argv[])
