@@ -146,7 +146,7 @@ int parse_marker_chunk(long unsigned int start, long unsigned int size)
 			break;
 		case 0xda:
 			get_marker_string(s, 0xda);
-			data_size = file_size - start;
+			data_size = file_size - start - 16;
 
 			compressed_data = (unsigned char *)malloc(data_size+4096);
 			if (!compressed_data) {
@@ -155,7 +155,7 @@ int parse_marker_chunk(long unsigned int start, long unsigned int size)
 				return 1;
 			} else {
 				fseek(fd, start+0xE, SEEK_SET);
-				read_bytes(compressed_data, data_size-0x10);
+				read_bytes(compressed_data, data_size);
 			}
 
 			printf("Parsing %s start=%lu size=%lu\n", s, start, data_size);
@@ -164,6 +164,10 @@ int parse_marker_chunk(long unsigned int start, long unsigned int size)
 			printf("\n\n");
 			for (i = 0; i < 16; i++)
 				printf("%x ", compressed_data[i]);
+			printf("-- %x %x %x\n",
+					compressed_data[data_size-3],
+					compressed_data[data_size-2],
+					compressed_data[data_size-1]);
 			printf("\n\n");
 
 			sos_nr_components = buf[4];
