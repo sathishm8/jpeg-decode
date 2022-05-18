@@ -305,6 +305,7 @@ static void process_picture_param()
 	printf("Process Picture params\n");
 	pic_param.picture_width = width; 
 	pic_param.picture_height = height;
+	pic_param.num_components = num_components;
 
 	printf("Image %ux%u\n", pic_param.picture_width, pic_param.picture_height);
 	for (i = 0; i < num_components; i++) {
@@ -340,10 +341,11 @@ VABufferID hft_buf, iqm_buf, picparam_buf, sliceparam_buf, slicedata_buf;
 VASurfaceID surfaces[NUM_SURFACES];
 VAConfigID config;
 VAContextID vacontext;
-VAStatus vastatus;
+VAStatus vas;
 VAEntrypoint entrypoints[5];
 int major, minor;
 VADisplay   vadpy;
+VAContextID context;
 
 /* Used from tinyjpeg libva-utils */
 static Display *x11_display;
@@ -368,18 +370,81 @@ static void va_close_display(VADisplay va_dpy)
 
 static int create_vaapi_codec_ctx()
 {
-
+	VAConfigAttrib attr;
+	int num_entrypoints, vldentry;
+	VAEntrypoint entrypoints[4];
 	vadpy = va_open_display();
 	/* Initialize the library */
-	vastatus = vaInitialize(vadpy, &major, &minor);
-	assert(vastatus == VA_STATUS_SUCCESS);
+	vas = vaInitialize(vadpy, &major, &minor);
+	assert(vas == VA_STATUS_SUCCESS);
+
+	vas = vaQueryConfigEntrypoints(vadpy, VAProfileJPEGBaseline, entrypoints, &num_entrypoints);
+	assert(vas == VA_STATUS_SUCCESS);
+	for (vldentry = 0; vldentry < num_entrypoints; vldentry++) {
+        if (entrypoints[vldentry] == VAEntrypointVLD)
+            break;
+	}
+	if (vldentry == num_entrypoints)
+	  assert(0);
+	/* Found JPEGBaseline Decode Entrypoint */
+	printf("JPEG decode entrypoint found\n");
+	attr.type = VAConfigAttribRTFormat;
+	vaGetConfigAttributes(vadpy, VAProfileJPEGBaseline, VAEntrypointVLD, &attr, 1);
+	if ((attr.value & VA_RT_FORMAT_YUV420) == 0)
+		assert(0);
+	/* VA_RT_FORMAT_YUV420 */
+	printf("supports VA_RT_FORMAT_YUV420\n");
+	vas = vaCreateConfig(vadpy, VAProfileJPEGBaseline, VAEntrypointVLD, &attr, 1, &config);
+	assert(vas == VA_STATUS_SUCCESS);
+	vas = vaCreateSurfaces(vadpy, VA_RT_FORMAT_YUV420, width, height, &surfaces[0], NUM_SURFACES, NULL, 0);
+	assert(vas == VA_STATUS_SUCCESS);
+	printf("created surfaces\n");
+	vas = vaCreateContext(vadpy, config, width, height, VA_PROGRESSIVE,
+								 &surfaces[0], NUM_SURFACES, &context);
+	assert(vas == VA_STATUS_SUCCESS);
+	printf("created va context\n");
+
+	/* Prepare param ans slice buffers */
+	vas = vaCreateBuffer(vadpy, context, VAPictureParameterBufferType,
+				sizeof(VAPictureParameterBufferJPEGBaseline),
+				1, &pic_param, &picparam_buf);
+	assert(vas == VA_STATUS_SUCCESS);
+	vas = vaCreateBuffer(vadpy, context, VAIQMatrixBufferType,
+					sizeof(VAIQMatrixBufferJPEGBaseline), 1, &iqm, &iqm_buf);
+	assert(vas == VA_STATUS_SUCCESS);
+	vas = vaCreateBuffer(vadpy, context, VAHuffmanTableBufferType,
+					sizeof(VAHuffmanTableBufferJPEGBaseline), 1, &hft, &hft_buf);
+	assert(vas == VA_STATUS_SUCCESS);
+	vas = vaCreateBuffer(vadpy, context, VASliceParameterBufferType,
+					sizeof(VASliceParameterBufferJPEGBaseline), 1, &slice_param, &sliceparam_buf);
+	assert(vas == VA_STATUS_SUCCESS);
+	vas = vaCreateBuffer(vadpy, context, VASliceDataBufferType, data_size ,
+					1, compressed_data, &slicedata_buf);
+	assert(vas == VA_STATUS_SUCCESS);
+
+	vas = vaBeginPicture(vadpy, context, surfaces[0]);
+	assert(vas == VA_STATUS_SUCCESS);
+	vas = vaRenderPicture(vadpy, context, &picparam_buf, 1);
+	assert(vas == VA_STATUS_SUCCESS);
+	vas = vaRenderPicture(vadpy, context, &iqm_buf, 1);
+	assert(vas == VA_STATUS_SUCCESS);
+	vas = vaRenderPicture(vadpy, context, &hft_buf, 1);
+	assert(vas == VA_STATUS_SUCCESS);
+	vas = vaRenderPicture(vadpy, context, &sliceparam_buf, 1);
+	assert(vas == VA_STATUS_SUCCESS);
+	vas = vaRenderPicture(vadpy, context, &slicedata_buf, 1);
+	assert(vas == VA_STATUS_SUCCESS);
+	vas = vaEndPicture(vadpy, context);
+	assert(vas == VA_STATUS_SUCCESS);
 
 	return 0;
 }
 
 static int close_vaapi_codec_ctx()
 {
-
+	vaDestroySurfaces(vadpy, &surfaces[0], NUM_SURFACES);
+	vaDestroyContext(vadpy, context);
+	vaDestroyConfig(vadpy, config);
 	va_close_display(vadpy);
 	/* all library internal resources will be cleaned up */
 	vaTerminate(vadpy);
@@ -448,6 +513,13 @@ int main(int argc, char *argv[])
 			break;
 	}
 
+	/*
+	 * memset(&pic_param, 0, sizeof(pic_param));
+	 * memset(&iqm, 0, sizeof(iqm));
+	 * memset(&hft, 0, sizeof(hft));
+	 * memset(&slice_param, 0, sizeof(slice_param));
+	 *
+	 */
    process_huffman_tabels();
    process_quantization_tabels();
 	process_picture_param();
