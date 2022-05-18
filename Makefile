@@ -4,6 +4,7 @@ LDFLAGS = -lva -lva-x11 -lX11
 $(TARGET): jpegdec.c
 	@echo "CC $<"
 	@$(CC) -o $@ $<  $(LDFLAGS)
+	@echo "LD $@"
 
 all: $(TARGET) 
 
