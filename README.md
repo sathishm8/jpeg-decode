@@ -1,5 +1,5 @@
 # jpeg-decode
-Application to parse and decode JPEG using VAAPI
+Application to parse JPEG image and decode using VAAPI
 
 
 Credits: tinyjpeg
