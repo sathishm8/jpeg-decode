@@ -453,8 +453,10 @@ int main(int argc, char *argv[])
 	process_picture_param();
 	process_slice_param();
 
-	create_vaapi_codec_ctx();
-	close_vaapi_codec_ctx();
+	if (decode) {
+		create_vaapi_codec_ctx();
+		close_vaapi_codec_ctx();
+	}
 
 	if (compressed_data)
 		free(compressed_data);
