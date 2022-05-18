@@ -6,6 +6,8 @@
 #include <fcntl.h>
 #include <string.h>
 #include <va/va.h>
+#include <va/va_x11.h>
+#include <assert.h>
 
 FILE *fd;
 unsigned char ch;
@@ -332,6 +334,56 @@ static void process_slice_param()
 	printf("\n");
 }
 
+#define NUM_SURFACES 16
+VABufferID hft_buf, iqm_buf, picparam_buf, sliceparam_buf, slicedata_buf;
+VASurfaceID surfaces[NUM_SURFACES];
+VAConfigID config;
+VAContextID vacontext;
+VAStatus vastatus;
+VAEntrypoint entrypoints[5];
+int major, minor;
+VADisplay   vadpy;
+
+/* Used from tinyjpeg libva-utils */
+static Display *x11_display;
+
+static VADisplay va_open_display(void)
+{
+    x11_display = XOpenDisplay(NULL);
+    if (!x11_display) {
+        printf("error: can't connect to X server!\n");
+        return NULL;
+    }
+    return vaGetDisplay(x11_display);
+}
+
+static void va_close_display(VADisplay va_dpy)
+{
+    if (!x11_display)
+        return;
+    XCloseDisplay(x11_display);
+    x11_display = NULL;
+}
+
+static int create_vaapi_codec_ctx()
+{
+
+	vadpy = va_open_display();
+	/* Initialize the library */
+	vastatus = vaInitialize(vadpy, &major, &minor);
+	assert(vastatus == VA_STATUS_SUCCESS);
+
+	return 0;
+}
+
+static int close_vaapi_codec_ctx()
+{
+
+	va_close_display(vadpy);
+	/* all library internal resources will be cleaned up */
+	vaTerminate(vadpy);
+}
+
 int main(int argc, char *argv[])
 {
 	unsigned int app_off, app_size;
@@ -359,6 +411,9 @@ int main(int argc, char *argv[])
    process_quantization_tabels();
 	process_picture_param();
 	process_slice_param();
+
+	create_vaapi_codec_ctx();
+	close_vaapi_codec_ctx();
 
 	if (compressed_data)
 		free(compressed_data);
