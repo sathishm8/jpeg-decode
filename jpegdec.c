@@ -8,6 +8,7 @@
 #include <va/va.h>
 #include <va/va_x11.h>
 #include <assert.h>
+#include<stdbool.h>
 
 FILE *fd;
 unsigned char ch;
@@ -384,11 +385,51 @@ static int close_vaapi_codec_ctx()
 	vaTerminate(vadpy);
 }
 
+static char optstr[] = "pdf:";
+bool decode = false;
+bool parse = false;
+char *file = NULL;
+char *obj = NULL;
+
+void usage()
+{
+	printf("%s -p [-d] -f sample_1920x1280.jpeg\n", obj);
+	printf("\t-p parse\n");
+	printf("\t-d decode\n");
+	printf("\t-f filename\n");
+	exit(1);
+}
+
+
 int main(int argc, char *argv[])
 {
 	unsigned int app_off, app_size;
 	int k, num_chunks = 20, r = 0;
-	fd = fopen(argv[1], "rb");
+	int c;
+
+	obj = argv[0];
+	while ((c = getopt(argc, argv, optstr)) != -1) {
+		switch (c) {
+			case 'p':
+				parse = true;
+				break;
+			case 'd':
+				decode = true;
+				break;
+			case 'f':
+				file = optarg;
+				break;
+			case '?':
+			default:
+				usage();
+				break;
+		}
+	}
+
+	if (file == NULL || !parse)
+		usage();
+
+	fd = fopen(file, "rb");
 	if (!fd) {
 		printf("failed to open input file %s\n", argv[1]);
 		exit(1);
