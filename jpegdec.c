@@ -15,6 +15,7 @@ unsigned char ch;
 long unsigned int pos;
 long unsigned int prev;
 long unsigned int size;
+bool luma = false;
 
 struct marker {
 	unsigned char mr;
@@ -79,15 +80,20 @@ void reach_next_marker(void)
 }
 
 unsigned int width, height, num_components, format, sos_nr_components;
+int surface_type;
+VAImageFormat vaformat;
 
 struct format {
 	unsigned char sampler;
 	char *name;
+	int surface_type;
+	int fourcc;
 };
 
 struct format formats[] = {
-	{0x22, "YCbCr420"},
-	{0x21, "YCbCr422"},
+	{0x22, "YUV420/NV12", VA_RT_FORMAT_YUV420, VA_FOURCC_NV12},
+	{0x21, "YUV422", VA_RT_FORMAT_YUV422, VA_FOURCC_YUY2},
+	{0x11, "YUV400", VA_RT_FORMAT_YUV420, VA_FOURCC_Y800},
 };
 
 struct comp {
@@ -104,8 +110,11 @@ int get_format_string(char *s, unsigned char sampler)
 	int i;
 
 	for (i = 0; i < sizeof(formats)/sizeof(formats[0]); i++) {
-		if (formats[i].sampler == sampler)
+		if (formats[i].sampler == sampler) {
 			strcpy(s, formats[i].name);
+			surface_type = formats[i].surface_type;
+			vaformat.fourcc = formats[i].fourcc;
+		}
 	}
 
 	return 0;
@@ -174,6 +183,7 @@ int parse_marker_chunk(long unsigned int start, long unsigned int size)
 			printf("\n\n");
 
 			sos_nr_components = buf[4];
+			//sos_nr_components = 1;
 			if (components[0].comp == buf[5])
 				components[0].h_s = buf[0x6];
 			if (components[1].comp == buf[7])
@@ -202,6 +212,7 @@ int parse_marker_chunk(long unsigned int start, long unsigned int size)
 			height = (buf[5] << 8 | buf[6]);
 			width = (buf[7] << 8 | buf[8]);
 			num_components = buf[9];
+			//num_components = 1;
 			format = buf[11];
 			get_format_string(s, buf[11]);
 			components[0].comp = buf[0xa];
@@ -325,6 +336,7 @@ static void process_slice_param()
 {
 	int i;
 	printf("Process Slice params\n");
+	slice_param.num_components = sos_nr_components;
 	for (i = 0; i < sos_nr_components; i++) {
 		slice_param.components[i].component_selector = components[i].comp;
 		slice_param.components[i].dc_table_selector = (components[i].h_s & 0xf0) >> 4;
@@ -336,7 +348,7 @@ static void process_slice_param()
 	printf("\n");
 }
 
-#define NUM_SURFACES 16
+#define NUM_SURFACES 1
 VABufferID hft_buf, iqm_buf, picparam_buf, sliceparam_buf, slicedata_buf;
 VASurfaceID surfaces[NUM_SURFACES];
 VAConfigID config;
@@ -370,7 +382,14 @@ static void va_close_display(VADisplay va_dpy)
 
 static int create_vaapi_codec_ctx()
 {
-	VAConfigAttrib attr;
+	VAConfigAttrib attrc;
+	VASurfaceAttrib attr;
+
+	void *address = NULL;
+	VAImage img;
+	VAStatus status;
+	int x = 0, y = 0;
+
 	int num_entrypoints, vldentry;
 	VAEntrypoint entrypoints[4];
 	vadpy = va_open_display();
@@ -388,17 +407,27 @@ static int create_vaapi_codec_ctx()
 	  assert(0);
 	/* Found JPEGBaseline Decode Entrypoint */
 	printf("JPEG decode entrypoint found\n");
-	attr.type = VAConfigAttribRTFormat;
-	vaGetConfigAttributes(vadpy, VAProfileJPEGBaseline, VAEntrypointVLD, &attr, 1);
-	if ((attr.value & VA_RT_FORMAT_YUV420) == 0)
+	attrc.type = VAConfigAttribRTFormat;
+	vaGetConfigAttributes(vadpy, VAProfileJPEGBaseline, VAEntrypointVLD, &attrc, 1);
+	if ((attrc.value & surface_type) == 0)
 		assert(0);
 	/* VA_RT_FORMAT_YUV420 */
 	printf("supports VA_RT_FORMAT_YUV420\n");
-	vas = vaCreateConfig(vadpy, VAProfileJPEGBaseline, VAEntrypointVLD, &attr, 1, &config);
+	vas = vaCreateConfig(vadpy, VAProfileJPEGBaseline, VAEntrypointVLD, &attrc, 1, &config);
 	assert(vas == VA_STATUS_SUCCESS);
-	vas = vaCreateSurfaces(vadpy, VA_RT_FORMAT_YUV420, width, height, &surfaces[0], NUM_SURFACES, NULL, 0);
+
+
+
+	attr.type = VASurfaceAttribPixelFormat;
+    attr.flags = VA_SURFACE_ATTRIB_SETTABLE;
+    attr.value.type = VAGenericValueTypeInteger;
+    attr.value.value.i = vaformat.fourcc;
+	vas = vaCreateSurfaces(vadpy, surface_type, width, height, &surfaces[0], NUM_SURFACES, &attr, 1);
 	assert(vas == VA_STATUS_SUCCESS);
 	printf("created surfaces\n");
+
+
+
 	vas = vaCreateContext(vadpy, config, width, height, VA_PROGRESSIVE,
 								 &surfaces[0], NUM_SURFACES, &context);
 	assert(vas == VA_STATUS_SUCCESS);
@@ -437,6 +466,41 @@ static int create_vaapi_codec_ctx()
 	vas = vaEndPicture(vadpy, context);
 	assert(vas == VA_STATUS_SUCCESS);
 
+	if (luma) {
+		FILE *fp;
+		printf("luma dump\n");
+		status = vaCreateImage(vadpy, &vaformat, width, height, &img);
+		if(status != VA_STATUS_SUCCESS)
+		{
+			printf("vaCreateImage error : %s\n",vaErrorStr(status));
+		}
+		printf("-- planes = %d\n", img.num_planes);
+		status = vaGetImage(vadpy,surfaces[0], 0, 0, width, height, img.image_id);
+		if(status != VA_STATUS_SUCCESS)
+		{
+			printf("vaGetImage error : %s\n",vaErrorStr(status));
+		}
+		/* Map the buffer for data */
+		status = vaMapBuffer(vadpy, img.buf, &address);
+		if (status != VA_STATUS_SUCCESS) {
+			printf("vaMapBuffer error : %s\n",vaErrorStr(status));
+		}
+		if (address) {
+			fp = fopen("out.yuv", "wb");
+			if(fp == NULL)
+				printf("Cannot open output file\n");
+			fwrite(address, width*height, 1, fp);
+			fclose(fp);
+			vaUnmapBuffer(vadpy, img.buf);
+		}
+
+		status = vaDestroyImage(vadpy,img.image_id);
+		if(status != VA_STATUS_SUCCESS)
+			printf("vaDestroyImage error : %s\n",vaErrorStr(status));
+	}
+
+
+
 	return 0;
 }
 
@@ -450,7 +514,7 @@ static int close_vaapi_codec_ctx()
 	vaTerminate(vadpy);
 }
 
-static char optstr[] = "pdf:";
+static char optstr[] = "pdlf:";
 bool decode = false;
 bool parse = false;
 char *file = NULL;
@@ -458,9 +522,10 @@ char *obj = NULL;
 
 void usage()
 {
-	printf("%s -p [-d] -f sample_1920x1280.jpeg\n", obj);
+	printf("%s -p [-d] [-l] -f sample_1920x1280.jpeg\n", obj);
 	printf("\t-p parse\n");
 	printf("\t-d decode\n");
+	printf("\t-l lumadump\n");
 	printf("\t-f filename\n");
 	exit(1);
 }
@@ -481,6 +546,9 @@ int main(int argc, char *argv[])
 			case 'd':
 				decode = true;
 				break;
+			case 'l':
+				luma = true;
+				break;
 			case 'f':
 				file = optarg;
 				break;
@@ -496,7 +564,7 @@ int main(int argc, char *argv[])
 
 	fd = fopen(file, "rb");
 	if (!fd) {
-		printf("failed to open input file %s\n", argv[1]);
+		printf("failed to open input file %s\n", file);
 		exit(1);
 	}
 
