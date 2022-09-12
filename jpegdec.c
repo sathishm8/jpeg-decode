@@ -79,21 +79,22 @@ void reach_next_marker(void)
 	} while (ch != 0xff);
 }
 
-unsigned int width, height, num_components, format, sos_nr_components;
+unsigned int width, height, num_components, sos_nr_components;
 int surface_type;
 VAImageFormat vaformat;
 
 struct format {
-	unsigned char sampler;
+	unsigned int sampler;
 	char *name;
 	int surface_type;
 	int fourcc;
 };
 
 struct format formats[] = {
-	{0x22, "YUV420/NV12", VA_RT_FORMAT_YUV420, VA_FOURCC_NV12},
-	{0x21, "YUV422", VA_RT_FORMAT_YUV422, VA_FOURCC_YUY2},
-	{0x11, "YUV400", VA_RT_FORMAT_YUV420, VA_FOURCC_Y800},
+	{0x111122, "YUV420/NV12", VA_RT_FORMAT_YUV420, VA_FOURCC_NV12},
+	{0x111121, "YUV422", VA_RT_FORMAT_YUV422, VA_FOURCC_YUY2},
+	{0x000011, "YUV400", VA_RT_FORMAT_YUV420, VA_FOURCC_Y800},
+	{0x111111, "YUV444", VA_RT_FORMAT_YUV444, VA_FOURCC_444P},
 };
 
 struct comp {
@@ -105,7 +106,7 @@ struct comp {
 
 struct comp components[3];
 
-int get_format_string(char *s, unsigned char sampler)
+int get_format_string(char *s, unsigned int sampler)
 {
 	int i;
 
@@ -212,9 +213,7 @@ int parse_marker_chunk(long unsigned int start, long unsigned int size)
 			height = (buf[5] << 8 | buf[6]);
 			width = (buf[7] << 8 | buf[8]);
 			num_components = buf[9];
-			//num_components = 1;
-			format = buf[11];
-			get_format_string(s, buf[11]);
+			get_format_string(s, buf[0xb] | buf[0xE] << 8 | buf[0x11] << 16);
 			components[0].comp = buf[0xa];
 			components[0].xyf = buf[0xb];
 			components[0].q_s = buf[0xc];
